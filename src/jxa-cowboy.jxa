@@ -11,6 +11,10 @@
   (require ets)
   (require io))
 
+(defn+ DEBUG (value)
+  (io/format "~p~n" [value])
+  value)
+
 (defn+ format-requires (ref)
   (joxa-lists/map (req (joxa-cmp-util/get-joxa-info :requires ref))
                   `(require ~req)))
@@ -43,7 +47,7 @@
 (defn+ format-name (ref args)
   (list_to_atom
    (++ (atom_to_list ref)
-       (integer_to_list (phash2 args)))))
+       (\- . (integer_to_list (phash2 args))))))
 
 (defmacro+ app.use (ref middleware)
   (do
@@ -67,34 +71,135 @@
 
          (defn+ execute ~args ~expr)))))
 
-(defmacro+ app.get (ref path args expr)
+(defn+ handler-fn (ref method path)
+  (jxa-cowboy/format-name ref [method path]))
+
+(defmacro+ add-handler (ref qmethod qpath args expr)
   (joxa-core/let
     (
      requires (format-requires ref)
      uses (format-uses ref)
-     [:string unquoted-path] path
-     name (format-name ref [:get unquoted-path])) ;; hash the args instead?
-    (do
-      (jxa-cowboy/start)
-      (jxa-cowboy/app.append ref :routes {unquoted-path name []})
-      `(do
-         (ns ~name
-           ~@requires
-           ~@uses)
+     [:string path] qpath
+     [:quote method] qmethod
+     name (format-name ref [:all path])
+     handler (format-name ref [method path])
+     get-handler (handler-fn ref :get path)
+     post-handler (handler-fn ref :post path)
+     put-handler (handler-fn ref :put path)
+     delete-handler (handler-fn ref :delete path)
+     _started (jxa-cowboy/start)
+     _appended (jxa-cowboy/app.append ref :routes {path name []}))
+     `(do
+        (ns ~name
+          (require code)
+          (require erlang)
+          (require cowboy_req)
+          (require jsx))
 
-         (defn+ init (_transport req args)
-           {:ok req args})
+        (defn+ init (_transport req args)
+          {:ok req args})
 
-         (defn+ terminate (_reason _req _state) :ok)
+        (defn+ terminate (_reason _req _state)
+          :ok)
 
-         (defn handle ~args ~expr)
+        (defn respond (status headers body req state)
+          (case (cowboy_req/reply status headers body req)
+            ({:ok req3}
+             {:ok req3 state})))
 
-         (defn+ handle (req state)
-           (case (handle req)
-             ({status headers body req2}
-              (case (cowboy_req/reply status headers body req2)
-                ({:ok req3}
-                 {:ok req3 state})))))))))
+        (defn handle-json (status headers body req state)
+          (respond status ({<<"content-type">> <<"application/json">>} . headers) (jsx/encode body) req state))
+
+        (defn exec (handler req state)
+          (code/ensure_loaded handler)
+          (case (erlang/function_exported handler :handle 1)
+            (:true
+              (case (erlang/apply handler :handle [req])
+               ({:json body req2}
+                (handle-json 200 [] body req2 state))
+               ({:json status headers body req2}
+                (handle-json 200 headers body req2 state))
+               ({:redirect headers url req2}
+                (respond 302 ({<<"location">> url} . headers) <<"">> req2 state))
+               ({status headers body req2}
+                (respond status headers body req2 state))))
+            (_not
+             (respond 404 [] <<"Not found">> req state))))
+
+        (defn+ handle (req state)
+          (case (cowboy_req/method req)
+            ({<<"GET">> req2}
+             (exec '~get-handler req2 state))
+             ({<<"POST">> req2}
+              (exec '~post-handler req2 state))
+             ({<<"PUT">> req2}
+              (exec '~put-handler req2 state))
+             ({<<"DELETE">> req2}
+              (exec '~delete-handler req2 state))))
+
+        (ns ~handler
+          ~@requires
+          ~@uses)
+
+        (defn+ handle ~args ~expr))))
+
+      ;; (DEBUG `(do
+      ;;    (ns ~handler
+      ;;      ~@requires
+      ;;      ~@uses)
+
+      ;;    (defn+ handle ~args ~expr)
+
+      ;;    (ns ~name
+      ;;      (require erlang)
+      ;;      (require cowboy_req)
+      ;;      (require jsx)
+      ;;      (require jxa-cowboy))
+
+      ;;    (defn+ init (_transport req args)
+      ;;      {:ok req args})
+
+      ;;    (defn+ terminate (_reason _req _state)
+      ;;      :ok)
+
+      ;;    (defn respond (status headers body req state)
+      ;;      (case (cowboy_req/reply status headers body req)
+      ;;        ({:ok req3}
+      ;;         {:ok req3 state})))
+
+      ;;    (defn handle-json (status headers body req state)
+      ;;      (respond status ({<<"content-type">> <<"application/json">>} . headers) (jsx/encode body) req state))
+
+      ;;    (defn exec (handler req state)
+      ;;      (case (erlang/apply handler :handle [req])
+      ;;        ({:json body req2}
+      ;;         (handle-json 200 [] body req2 state))
+      ;;        ({:json status headers body req2}
+      ;;         (handle-json 200 headers body req2 state))
+      ;;        ({:redirect headers url req2}
+      ;;         (respond 302 ({<<"location">> url} . headers) <<"">> req2 state))
+      ;;        ({status headers body req2}
+      ;;         (respond status headers body req2 state))))
+
+      ;;    (defn+ handle (req state)
+      ;;      (case (cowboy_req/method req)
+      ;;        ({<<"GET">> req2}
+      ;;         (exec '~get-handler req2 state))
+      ;;        ({<<"POST">> req2}
+      ;;         (exec '~post-handler req2 state))
+      ;;        ({<<"PUT">> req2}
+      ;;         (exec '~put-handler req2 state))
+      ;;        ({<<"DELETE">> req2}
+      ;;         (exec '~delete-handler req2 state))))
+
+
+      ;;    )))))
+
+(defmacro+ app.get (ref path args expr)
+  `(jxa-cowboy/add-handler ~ref :get ~path ~args ~expr))
+
+(defmacro+ app.post (ref path args expr)
+  `(jxa-cowboy/add-handler ~ref :post ~path ~args ~expr))
 
 (defn+ strip-key (items)
   (joxa-lists/map ({key value} items)

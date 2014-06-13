@@ -1,0 +1,142 @@
+(ns chat-db
+  (require ets)
+  (require joxa-lists)
+  (use erlang))
+
+(defn+ start ()
+  (ets/new :chat-messages [:public {:read_concurrency :true} :named_table :ordered_set]))
+
+(defn format (messages)
+  (joxa-lists/map ({date name message} messages)
+                  [{<<"name">> name} {<<"message">> message}]))
+
+(defn+ list ()
+  (format (ets/tab2list :chat-messages)))
+
+(defn+ add (name message)
+  ;; TODO notify the hyper-emitter
+  (ets/insert :chat-messages {(now) name message}))
+
+(ns chat
+  (use jxa-cowboy)
+  (require chat-db)
+  (require jsx)
+  (require joxa-core)
+  (require io)
+  (require cowboy_req)
+  (require cowboy_base)
+  (require fast_key)
+  (require simple_env))
+
+;; use an inline middleware function
+(app.use chat (req env)
+  (do
+    (io/format "~s ~s~n" (cowboy_req/get [:method :path] req))
+    {:ok req env}))
+
+(app.use chat (req env)
+  (joxa-core/if (cowboy_req/has_body req)
+   (case (cowboy_req/body req)
+     ({:ok <<>> req2}
+      {:ok req2 env})
+     ({:ok body req2}
+      {:ok (cowboy_req/set_meta :buffer body req2) env})
+     ({:error reason}
+      {:error 500 req}))
+   {:ok req env}))
+
+(app.use chat (req env)
+  (case (cowboy_req/meta :buffer req)
+    ({:undefined req}
+     {:ok req env})
+    ({buffer req2}
+     (joxa-core/try
+       {:ok (cowboy_req/set_meta :body (jsx/decode buffer) req2) env}
+       (catch
+         ({_type _reason}
+          {:ok req2 env}))))))
+
+(app.use chat cowboy_base)
+(app.use chat cowboy_router)
+
+(app.get chat "/" (req)
+  (let*
+    (body [
+      {<<"href">> (cowboy_base/resolve <<"/">> req)}
+      {<<"join">> [
+        {<<"method">> <<"POST">>}
+        {<<"action">> (cowboy_base/resolve <<"/join">> req)}
+        {<<"input">> [
+          {<<"name">> [
+            {<<"type">> <<"text">>}]}]}]}])
+  {:json 200 [] body req}))
+
+(app.post chat "/join" (req)
+  (joxa-core/let
+    (
+      {body req} (cowboy_req/meta :body req)
+      name (fast_key/get <<"name">> body)
+      url (cowboy_base/resolve <<(<<"/chat/">> :binary) (name :binary)>> req))
+    {:redirect [] url req}))
+
+(app.get chat "/chat/:name" (req)
+  (joxa-core/let
+    (
+     {name req} (cowboy_req/binding :name req)
+     href (cowboy_base/resolve <<(<<"/chat/">> :binary) (name :binary)>> req)
+     messages (cowboy_base/resolve <<"/messages">> req)
+     body [
+      {<<"href">> href}
+      {<<"messages">> [
+        {<<"href">> messages}]}
+      {<<"post">> [
+        {<<"method">> <<"POST">>}
+        {<<"action">> messages}
+        {<<"input">> [
+          {<<"message">> [
+            {<<"type">> <<"text">>}]}
+          {<<"name">> [
+            {<<"type">> <<"hidden">>}
+            {<<"value">> name}]}]}]}])
+  {:json 200 [] body req}))
+
+(app.get chat "/messages" (req)
+  (joxa-core/let
+    (
+     {name req} (cowboy_req/binding :name req)
+     href (cowboy_base/resolve <<"/messages">> req)
+     messages (chat-db/list)
+     body [
+      {<<"href">> href}
+      {<<"messages">> messages}])
+  {:json 200 [] body req}))
+
+(app.post chat "/messages" (req)
+  (joxa-core/let
+    (
+      {body req} (cowboy_req/meta :body req)
+      name (fast_key/get <<"name">> body)
+      message (fast_key/get <<"message">> body)
+      _res (chat-db/add name message))
+    {204 [] [] req}))
+
+(app.use chat cowboy_handler)
+
+;; listen on a port
+(app.listen chat
+  (simple_env/get_integer "PORT" 8080))
+
+(defn+ start ()
+  (application/ensure_all_started :cowboy)
+  (application/start :chat))
+
+(ns chat-app
+  (require simple_sup)
+  (require chat)
+  (require chat-db)
+  (require ets))
+
+(defn+ start (_type _args)
+  (chat-db/start)
+  (chat/listen)
+  (simple_sup/start_link []))

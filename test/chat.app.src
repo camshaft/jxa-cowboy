@@ -1,0 +1,10 @@
+{application, 'chat', [
+  {id, "chat"},
+  {description, "chat server"},
+  {vsn, "0.1.0"},
+  {modules, ['chat', 'chat-app']},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {mod, { 'chat-app', []}}
+]}.

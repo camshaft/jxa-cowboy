@@ -1,8 +1,11 @@
 PROJECT = jxa-cowboy
 
-DEPS = cowboy simple_env
+DEPS = cowboy jsx simple_env simple_sup cowboy_base
 dep_cowboy = pkg://cowboy master
+dep_jsx = pkg://jsx master
 dep_simple_env = https://github.com/camshaft/simple_env.git master
+dep_simple_sup = https://github.com/camshaft/simple_sup.git master
+dep_cowboy_base = https://github.com/camshaft/cowboy_base.git master
 
 JXA_SRC = $(wildcard src/*.jxa)
 JXA_OUT = $(patsubst src/%.jxa, ebin/%.beam, $(JXA_SRC))
@@ -24,5 +27,8 @@ ebin/%.beam: src/%.jxa
 ebin/%.beam: test/%.jxa
 	@ERL_LIBS=deps:.. ./bin/joxa -o ebin -c $<
 
-start: all $(TEST_OUT)
-	@erl -pa ebin -pa deps/*/ebin -eval "application:ensure_all_started(cowboy), 'my-app':listen()." $(args)
+ebin/chat.app: test/chat.app.src
+	@cp $< $@
+
+start: all ebin/chat.app $(TEST_OUT)
+	@erl -pa ebin -pa deps/*/ebin -s chat $(args)
