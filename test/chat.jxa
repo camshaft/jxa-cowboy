@@ -117,8 +117,9 @@
       {body req} (cowboy_req/meta :body req)
       name (fast_key/get <<"name">> body)
       message (fast_key/get <<"message">> body)
-      _res (chat-db/add name message))
-    {204 [] [] req}))
+      _res (chat-db/add name message)
+      url (cowboy_base/resolve <<(<<"/chat/">> :binary) (name :binary)>> req))
+    {:redirect [] url req}))
 
 (app.use chat cowboy_handler)
 
