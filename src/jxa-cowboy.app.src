@@ -1,0 +1,9 @@
+{application, 'jxa-cowboy', [
+  {id, "jxa-cowboy"},
+  {description, "macros for cowboy servers"},
+  {vsn, "0.1.0"},
+  {modules, []},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []}
+]}.

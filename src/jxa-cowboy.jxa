@@ -1,0 +1,116 @@
+(ns jxa-cowboy
+  (require joxa-core)
+  (require cowboy)
+  (require cowboy_router)
+  (require simple_env)
+  (use erlang)
+  (require application)
+  (require joxa-cmp-util)
+  (require joxa-lists)
+  (require lists)
+  (require ets)
+  (require io))
+
+(defn+ format-requires (ref)
+  (joxa-lists/map (req (joxa-cmp-util/get-joxa-info :requires ref))
+                  `(require ~req)))
+
+(defn+ format-uses (ref)
+  (lists/usort
+    (joxa-lists/map ({_ {name namespace}} (joxa-cmp-util/get-joxa-info :uses ref))
+                  `(use ~namespace))))
+
+(defmacro+ start-http (ref routes port middlewares)
+  (let*
+    (
+     dispatch (cowboy_router/compile routes))
+  `(cowboy/start_http
+    '~ref
+    100
+    [{:port ~port}]
+    [{:env [{:dispatch '~dispatch}]} {:middlewares ~middlewares}])))
+
+(defn+ start ()
+  (case (ets/info :jxa-cowboy)
+    (:undefined
+     (ets/new :jxa-cowboy [:bag :public :named_table]))
+    (_other
+     :ok)))
+
+(defn+ app.append (ref key value)
+  (ets/insert :jxa-cowboy {{ref key} value}))
+
+(defn+ format-name (ref args)
+  (list_to_atom
+   (++ (atom_to_list ref)
+       (integer_to_list (phash2 args)))))
+
+(defmacro+ app.use (ref middleware)
+  (do
+    (jxa-cowboy/start)
+    (jxa-cowboy/app.append ref :middlewares middleware)
+    `()))
+
+(defmacro+ app.use (ref args expr)
+  (let*
+    (
+     requires (format-requires ref)
+     uses (format-uses ref)
+     name (format-name ref [args expr]))
+    (do
+      (jxa-cowboy/start)
+      (jxa-cowboy/app.append ref :middlewares name)
+      `(do
+         (ns ~name
+           ~@requires
+           ~@uses)
+
+         (defn+ execute ~args ~expr)))))
+
+(defmacro+ app.get (ref path args expr)
+  (joxa-core/let
+    (
+     requires (format-requires ref)
+     uses (format-uses ref)
+     [:string unquoted-path] path
+     name (format-name ref [:get unquoted-path])) ;; hash the args instead?
+    (do
+      (jxa-cowboy/start)
+      (jxa-cowboy/app.append ref :routes {unquoted-path name []})
+      `(do
+         (ns ~name
+           ~@requires
+           ~@uses)
+
+         (defn+ init (_transport req args)
+           {:ok req args})
+
+         (defn+ terminate (_reason _req _state) :ok)
+
+         (defn handle ~args ~expr)
+
+         (defn+ handle (req state)
+           (case (handle req)
+             ({status headers body req2}
+              (case (cowboy_req/reply status headers body req2)
+                ({:ok req3}
+                 {:ok req3 state})))))))))
+
+(defn+ strip-key (items)
+  (joxa-lists/map ({key value} items)
+                  value))
+
+(defmacro+ app.listen (ref port)
+  (joxa-core/let
+    (
+     requires (format-requires ref)
+     uses (format-uses ref)
+     middlewares (jxa-cowboy/strip-key (ets/lookup :jxa-cowboy {ref :middlewares}))
+     routes [{:_ (jxa-cowboy/strip-key (ets/lookup :jxa-cowboy {ref :routes}))}])
+    `(do
+       (ns ~ref
+         ~@requires
+         ~@uses)
+
+       (defn+ listen ()
+         (jxa-cowboy/start-http ~ref ~routes ~port '~middlewares)))))
