@@ -10,7 +10,7 @@
 
 (defn format (messages)
   (joxa-lists/map ({date name message} messages)
-                  [{<<"name">> name} {<<"message">> message}]))
+                  [{<<"name">> name} {<<"content">> message}]))
 
 (defn+ list ()
   (format (ets/tab2list :chat-messages)))
