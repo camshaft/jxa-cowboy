@@ -120,7 +120,7 @@
      messages (chat-db/list)
      body [
       {<<"href">> href}
-      {<<"messages">> messages}])
+      {<<"collection">> messages}])
   {:json 200 [] body req}))
 
 (app.post chat "/messages" (req)
