@@ -98,6 +98,7 @@
      messages (cowboy_base/resolve <<"/messages">> req)
      body [
       {<<"href">> href}
+      {<<"name">> name}
       {<<"messages">> [
         {<<"href">> messages}]}
       {<<"post">> [
